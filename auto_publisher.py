@@ -32,7 +32,7 @@ def generate_story_script():
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": "You are a professional action movie storyteller."},
             {
@@ -44,6 +44,8 @@ def generate_story_script():
     }
     
     response = requests.post(url, headers=headers, json=payload)
+    if response.status_code != 200:
+        print(f"Groq API Error Response: {response.text}")
     response.raise_for_status()
     data = response.json()["choices"][0]["message"]["content"]
     return json.loads(data)
