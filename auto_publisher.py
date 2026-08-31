@@ -114,14 +114,18 @@ def upload_youtube(title, description):
 
 def upload_facebook(title, description):
     url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+    params = {
+        "access_token": FB_PAGE_ACCESS_TOKEN
+    }
     payload = {
         "title": title,
-        "description": description,
-        "access_token": FB_PAGE_ACCESS_TOKEN
+        "description": description
     }
     with open(FINAL_VIDEO_PATH, "rb") as video_file:
         files = {"source": video_file}
-        response = requests.post(url, data=payload, files=files)
+        response = requests.post(url, params=params, data=payload, files=files)
+        if response.status_count != 200:
+            print(f"Facebook API Error Response: {response.text}")
         response.raise_for_status()
     print(f"[+] Facebook Success: {response.json()}")
 
