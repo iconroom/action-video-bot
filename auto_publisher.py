@@ -32,7 +32,7 @@ def generate_story_script():
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "mixtral-8x7b-32768",
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": "You are a professional action movie storyteller."},
             {
