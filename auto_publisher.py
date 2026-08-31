@@ -4,13 +4,22 @@ import json
 import random
 import subprocess
 import requests
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
+# API Credentials from Environment
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 IG_USER_ID = os.getenv("IG_USER_ID")
 TIKTOK_ACCESS_TOKEN = os.getenv("TIKTOK_ACCESS_TOKEN")
+
+# YouTube OAuth Credentials
+YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
+YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 
 STOCK_ASSETS_DIR = "stock_assets"
 OUTPUT_DIR = "output"
@@ -40,7 +49,6 @@ def generate_story_script():
     return json.loads(data)
 
 def fetch_pexels_clips(keywords):
-    """Automatically downloads video clips based on story keywords."""
     os.makedirs(STOCK_ASSETS_DIR, exist_ok=True)
     headers = {"Authorization": PEXELS_API_KEY}
     
@@ -77,6 +85,30 @@ def render_video():
         "-c:a", "aac", "-b:a", "192k", FINAL_VIDEO_PATH
     ]
     subprocess.run(ffmpeg_cmd, check=True)
+
+def upload_youtube(title, description):
+    creds = Credentials(
+        token=None,
+        refresh_token=YOUTUBE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=YOUTUBE_CLIENT_ID,
+        client_secret=YOUTUBE_CLIENT_SECRET
+    )
+    youtube = build("youtube", "v3", credentials=creds)
+    
+    body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description,
+            "categoryId": "24"
+        },
+        "status": {"privacyStatus": "public"}
+    }
+    
+    media = MediaFileUpload(FINAL_VIDEO_PATH, chunksize=-1, resumable=True, mimetype="video/mp4")
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    response = request.execute()
+    print(f"[+] YouTube Success: Video ID {response.get('id')}")
 
 def upload_facebook(title, description):
     url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
@@ -123,6 +155,10 @@ if __name__ == "__main__":
     render_video()
     
     print("Posting video...")
+    if YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN:
+        try: upload_youtube(story['title'], caption)
+        except Exception as e: print(f"[-] YouTube Error: {e}")
+
     if FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN:
         try: upload_facebook(story['title'], caption)
         except Exception as e: print(f"[-] Facebook Error: {e}")
