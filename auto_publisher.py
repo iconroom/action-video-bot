@@ -4,6 +4,7 @@ import json
 import random
 import subprocess
 import requests
+import time
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -81,10 +82,25 @@ def render_video():
         for clip in stock_files:
             f.write(f"file '{os.path.abspath(clip)}'\n")
 
+    # Fixed FFmpeg command: Fixes hanging by enforcing a strict framerate (fps=30), 
+    # adding a blank silent audio track via lavfi (preventing missing audio track bugs/mutes),
+    # scaling properly to vertical format, and applying a watermark overlay if watermark.png exists.
+    filter_complex = (
+        "[0:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2,fps=30[v]"
+    )
+    if os.path.exists("watermark.png"):
+        filter_complex += ";[v]movie=watermark.png,scale=300:-1[wm];[v][wm]overlay=W-w-50:H-h-150[outv]"
+    else:
+        filter_complex += ";[v]copy[outv]"
+
     ffmpeg_cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "1:a",
         "-t", "180", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", FINAL_VIDEO_PATH
+        "-c:a", "aac", "-b:a", "192k", "-shortest",
+        FINAL_VIDEO_PATH
     ]
     subprocess.run(ffmpeg_cmd, check=True)
 
@@ -113,21 +129,54 @@ def upload_youtube(title, description):
     print(f"[+] YouTube Success: Video ID {response.get('id')}")
 
 def upload_facebook(title, description):
-    url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-    params = {
-        "access_token": FB_PAGE_ACCESS_TOKEN
-    }
+    # Fixed Facebook endpoint to use graph-video for media file uploads
+    url = f"https://graph-video.facebook.com/v19.0/{FB_PAGE_ID}/videos"
     payload = {
+        "access_token": FB_PAGE_ACCESS_TOKEN,
         "title": title,
         "description": description
     }
     with open(FINAL_VIDEO_PATH, "rb") as video_file:
         files = {"source": video_file}
-        response = requests.post(url, params=params, data=payload, files=files)
-        if response.status_count != 200:
+        response = requests.post(url, data=payload, files=files)
+        if response.status_code != 200:
             print(f"Facebook API Error Response: {response.text}")
         response.raise_for_status()
     print(f"[+] Facebook Success: {response.json()}")
+
+def upload_instagram(caption):
+    if not IG_USER_ID:
+        print("[-] Instagram Error: IG_USER_ID is missing.")
+        return
+    
+    # Note: Instagram Graph API requires a public URL pointing to your video file.
+    # Replace the placeholder URL below with your actual publicly accessible server URL where final_story.mp4 is hosted.
+    public_video_url = "https://topsungglobal.bond/output/final_story.mp4"
+    
+    print("Posting to Instagram Reels...")
+    creation_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+    creation_payload = {
+        "access_token": FB_PAGE_ACCESS_TOKEN,
+        "media_type": "REELS",
+        "video_url": public_video_url,
+        "caption": caption
+    }
+    creation_res = requests.post(creation_url, data=creation_payload).json()
+    creation_id = creation_res.get("id")
+
+    if creation_id:
+        print("[+] IG Container created. Waiting for processing...")
+        time.sleep(15)
+        
+        publish_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
+        publish_payload = {
+            "access_token": FB_PAGE_ACCESS_TOKEN,
+            "creation_id": creation_id
+        }
+        publish_res = requests.post(publish_url, data=publish_payload).json()
+        print(f"[+] Instagram Success: Media ID {publish_res.get('id')}")
+    else:
+        print(f"[-] Instagram Creation Error: {creation_res}")
 
 def upload_tiktok(title):
     url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
@@ -157,7 +206,7 @@ if __name__ == "__main__":
     keywords = story.get("keywords", ["action movie", "explosion", "chase"])
     fetch_pexels_clips(keywords)
 
-    print("Rendering 3-minute video...")
+    print("Rendering 3-minute video with watermark and audio fix...")
     render_video()
     
     print("Posting video...")
@@ -168,6 +217,10 @@ if __name__ == "__main__":
     if FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN:
         try: upload_facebook(story['title'], caption)
         except Exception as e: print(f"[-] Facebook Error: {e}")
+        
+    if IG_USER_ID and FB_PAGE_ACCESS_TOKEN:
+        try: upload_instagram(caption)
+        except Exception as e: print(f"[-] Instagram Error: {e}")
         
     if TIKTOK_ACCESS_TOKEN:
         try: upload_tiktok(story['title'])
