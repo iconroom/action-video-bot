@@ -71,7 +71,7 @@ def generate_story_script(episode_num):
 
 async def generate_voiceover(full_text):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    voice = "en-US-ChristopherNeural" # Dynamic action-themed male voice
+    voice = "en-US-ChristopherNeural"
     communicate = edge_tts.Communicate(full_text, voice)
     await communicate.save(AUDIO_PATH)
     print("[+] Generated Voiceover MP3 using Edge-TTS")
@@ -232,7 +232,6 @@ if __name__ == "__main__":
     story = generate_story_script(current_episode)
     scenes = story.get("scenes", [])
     
-    # Combine individual scene narratives into a full continuous voiceover script
     full_narrative = " ".join([scene.get("narration_text", "") for scene in scenes])
     if not full_narrative:
         full_narrative = story.get("narrative", "")
@@ -265,6 +264,5 @@ if __name__ == "__main__":
         try: upload_tiktok(f"{story['title']} - Ep. {current_episode}")
         except Exception as e: print(f"[-] TikTok Error: {e}")
         
-    # Increment and save episode count for the next run cycle
     save_episode_number(current_episode + 1)
     print("Execution completed successfully.")
