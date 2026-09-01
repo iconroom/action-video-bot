@@ -43,7 +43,8 @@ def save_processed_ids(processed_set):
         json.dump({"processed": list(processed_set)[-100:]}, f)
 
 def fetch_latest_trending_news(processed_ids):
-    feed = feedparser.parse("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en")
+    # Updated to pull top global/world trending headlines regardless of region
+    feed = feedparser.parse("https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en")
     for entry in feed.entries:
         news_id = entry.get("id", entry.link)
         if news_id not in processed_ids:
