@@ -5,6 +5,8 @@ import random
 import subprocess
 import requests
 import time
+import asyncio
+import edge_tts
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -25,8 +27,24 @@ YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 STOCK_ASSETS_DIR = "stock_assets"
 OUTPUT_DIR = "output"
 FINAL_VIDEO_PATH = os.path.join(OUTPUT_DIR, "final_story.mp4")
+AUDIO_PATH = os.path.join(OUTPUT_DIR, "voiceover.mp3")
+STATE_FILE = "episode_state.json"
 
-def generate_story_script():
+def get_next_episode_number():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("episode", 1)
+        except Exception:
+            pass
+    return 1
+
+def save_episode_number(ep_num):
+    with open(STATE_FILE, "w") as f:
+        json.dump({"episode": ep_num}, f)
+
+def generate_story_script(episode_num):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -35,10 +53,10 @@ def generate_story_script():
     payload = {
         "model": "openai/gpt-oss-120b",
         "messages": [
-            {"role": "system", "content": "You are a professional action movie storyteller."},
+            {"role": "system", "content": "You are a professional action movie storyteller producing episodic short-form content."},
             {
                 "role": "user", 
-                "content": "Write an engaging action story. Return JSON with keys: 'title', 'narrative', 'hashtags', and 'keywords' (a list of 3 search terms like ['car chase', 'explosion', 'martial arts'])."
+                "content": f"Write Episode {episode_num} of an action-packed cinematic story arc. Return JSON with keys: 'title', 'narrative', 'hashtags', and 'scenes' (a list of 3 separate objects, each having 'search_keyword' for Pexels background footage and 'narration_text' matching that specific part of the story)."
             }
         ],
         "response_format": {"type": "json_object"}
@@ -51,11 +69,19 @@ def generate_story_script():
     data = response.json()["choices"][0]["message"]["content"]
     return json.loads(data)
 
-def fetch_pexels_clips(keywords):
+async def generate_voiceover(full_text):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    voice = "en-US-ChristopherNeural" # Dynamic action-themed male voice
+    communicate = edge_tts.Communicate(full_text, voice)
+    await communicate.save(AUDIO_PATH)
+    print("[+] Generated Voiceover MP3 using Edge-TTS")
+
+def fetch_pexels_clips(scenes):
     os.makedirs(STOCK_ASSETS_DIR, exist_ok=True)
     headers = {"Authorization": PEXELS_API_KEY}
     
-    for idx, keyword in enumerate(keywords):
+    for idx, scene in enumerate(scenes):
+        keyword = scene.get("search_keyword", "action movie")
         url = f"https://api.pexels.com/videos/search?query={keyword}&per_page=3&orientation=portrait"
         res = requests.get(url, headers=headers)
         if res.status_code == 200:
@@ -68,11 +94,11 @@ def fetch_pexels_clips(keywords):
                     v_res = requests.get(selected_url)
                     with open(filepath, "wb") as f:
                         f.write(v_res.content)
-                    print(f"[+] Downloaded clip for: {keyword}")
+                    print(f"[+] Downloaded dynamic background clip {idx} for keyword: {keyword}")
 
 def render_video():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    stock_files = [os.path.join(STOCK_ASSETS_DIR, f) for f in os.listdir(STOCK_ASSETS_DIR) if f.endswith('.mp4')]
+    stock_files = sorted([os.path.join(STOCK_ASSETS_DIR, f) for f in os.listdir(STOCK_ASSETS_DIR) if f.endswith('.mp4')])
     
     if not stock_files:
         raise FileNotFoundError("No clips were downloaded.")
@@ -82,9 +108,6 @@ def render_video():
         for clip in stock_files:
             f.write(f"file '{os.path.abspath(clip)}'\n")
 
-    # Fixed FFmpeg command: Fixes hanging by enforcing a strict framerate (fps=30), 
-    # adding a blank silent audio track via lavfi (preventing missing audio track bugs/mutes),
-    # scaling properly to vertical format, and applying a watermark overlay if watermark.png exists.
     filter_complex = (
         "[0:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2,fps=30[v]"
     )
@@ -93,12 +116,13 @@ def render_video():
     else:
         filter_complex += ";[v]copy[outv]"
 
+    # Renders concatenated background video synchronized precisely to the generated speech audio track duration
     ffmpeg_cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
-        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-i", AUDIO_PATH,
         "-filter_complex", filter_complex,
         "-map", "[outv]", "-map", "1:a",
-        "-t", "180", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-shortest",
         FINAL_VIDEO_PATH
     ]
@@ -129,7 +153,6 @@ def upload_youtube(title, description):
     print(f"[+] YouTube Success: Video ID {response.get('id')}")
 
 def upload_facebook(title, description):
-    # Fixed Facebook endpoint to use graph-video for media file uploads
     url = f"https://graph-video.facebook.com/v19.0/{FB_PAGE_ID}/videos"
     payload = {
         "access_token": FB_PAGE_ACCESS_TOKEN,
@@ -149,8 +172,6 @@ def upload_instagram(caption):
         print("[-] Instagram Error: IG_USER_ID is missing.")
         return
     
-    # Note: Instagram Graph API requires a public URL pointing to your video file.
-    # Replace the placeholder URL below with your actual publicly accessible server URL where final_story.mp4 is hosted.
     public_video_url = "https://topsungglobal.bond/output/final_story.mp4"
     
     print("Posting to Instagram Reels...")
@@ -198,24 +219,35 @@ def upload_tiktok(title):
     print(f"[+] TikTok Success: {r}")
 
 if __name__ == "__main__":
-    print("Generating story script...")
-    story = generate_story_script()
-    caption = f"{story['title']}\n\n{story['narrative']}\n\n{' '.join(story.get('hashtags', []))}"
+    current_episode = get_next_episode_number()
+    print(f"Generating story script for Episode {current_episode}...")
     
-    print("Fetching matching action clips...")
-    keywords = story.get("keywords", ["action movie", "explosion", "chase"])
-    fetch_pexels_clips(keywords)
+    story = generate_story_script(current_episode)
+    scenes = story.get("scenes", [])
+    
+    # Combine individual scene narratives into a full continuous voiceover script
+    full_narrative = " ".join([scene.get("narrative_text", "") for scene in scenes])
+    if not full_narrative:
+        full_narrative = story.get("narrative", "")
 
-    print("Rendering 3-minute video with watermark and audio fix...")
+    caption = f"{story['title']} (Ep. {current_episode})\n\n{full_narrative}\n\n{' '.join(story.get('hashtags', []))}"
+    
+    print("Generating voiceover audio track...")
+    asyncio.run(generate_voiceover(full_narrative))
+
+    print("Fetching multi-scene action clips from Pexels...")
+    fetch_pexels_clips(scenes)
+
+    print("Rendering final episodic video with multi-background switching and voiceover...")
     render_video()
     
     print("Posting video...")
     if YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN:
-        try: upload_youtube(story['title'], caption)
+        try: upload_youtube(f"{story['title']} - Ep. {current_episode}", caption)
         except Exception as e: print(f"[-] YouTube Error: {e}")
 
     if FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN:
-        try: upload_facebook(story['title'], caption)
+        try: upload_facebook(f"{story['title']} - Ep. {current_episode}", caption)
         except Exception as e: print(f"[-] Facebook Error: {e}")
         
     if IG_USER_ID and FB_PAGE_ACCESS_TOKEN:
@@ -223,7 +255,9 @@ if __name__ == "__main__":
         except Exception as e: print(f"[-] Instagram Error: {e}")
         
     if TIKTOK_ACCESS_TOKEN:
-        try: upload_tiktok(story['title'])
+        try: upload_tiktok(f"{story['title']} - Ep. {current_episode}")
         except Exception as e: print(f"[-] TikTok Error: {e}")
         
+    # Increment and save episode count for the next run cycle
+    save_episode_number(current_episode + 1)
     print("Execution completed successfully.")
