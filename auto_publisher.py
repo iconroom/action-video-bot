@@ -12,7 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # API Credentials from Environment
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
@@ -45,29 +45,24 @@ def save_episode_number(ep_num):
         json.dump({"episode": ep_num}, f)
 
 def generate_story_script(episode_num):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    prompt = (
+        f"Write Episode {episode_num} of an action-packed cinematic story arc. "
+        "Return valid JSON with keys: 'title', 'narrative', 'hashtags', and 'scenes' "
+        "(a list of 10 separate sequential objects, each having 'search_keyword' for Pexels background "
+        "footage and 'narration_text' matching that specific part of the story)."
+    )
     payload = {
-        "model": "openai/gpt-oss-120b",
-        "messages": [
-            {"role": "system", "content": "You are a professional action movie storyteller producing fast-paced episodic short-form content."},
-            {
-                "role": "user", 
-                "content": f"Write Episode {episode_num} of an action-packed cinematic story arc. Return JSON with keys: 'title', 'narrative', 'hashtags', and 'scenes' (a list of 10 separate sequential objects, each having 'search_keyword' for Pexels background footage and 'narration_text' matching that specific part of the story)."
-            }
-        ],
-        "response_format": {"type": "json_object"}
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"}
     }
     
     response = requests.post(url, headers=headers, json=payload)
-    if response.status_code != 200:
-        print(f"Groq API Error Response: {response.text}")
     response.raise_for_status()
-    data = response.json()["choices"][0]["message"]["content"]
-    return json.loads(data)
+    data = response.json()
+    content_text = data["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(content_text)
 
 async def generate_voiceover(full_text):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -144,86 +139,14 @@ def upload_youtube(title, description):
         client_secret=YOUTUBE_CLIENT_SECRET
     )
     youtube = build("youtube", "v3", credentials=creds)
-    
     body = {
-        "snippet": {
-            "title": title[:100],
-            "description": description,
-            "categoryId": "24"
-        },
+        "snippet": {"title": title[:100], "description": description, "categoryId": "24"},
         "status": {"privacyStatus": "public"}
     }
-    
     media = MediaFileUpload(FINAL_VIDEO_PATH, chunksize=-1, resumable=True, mimetype="video/mp4")
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = request.execute()
     print(f"[+] YouTube Success: Video ID {response.get('id')}")
-
-def upload_facebook(title, description):
-    url = f"https://graph-video.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-    payload = {
-        "access_token": FB_PAGE_ACCESS_TOKEN,
-        "title": title,
-        "description": description
-    }
-    with open(FINAL_VIDEO_PATH, "rb") as video_file:
-        files = {"source": video_file}
-        response = requests.post(url, data=payload, files=files)
-        if response.status_code != 200:
-            print(f"Facebook API Error Response: {response.text}")
-        response.raise_for_status()
-    print(f"[+] Facebook Success: {response.json()}")
-
-def upload_instagram(caption):
-    if not IG_USER_ID:
-        print("[-] Instagram Error: IG_USER_ID is missing.")
-        return
-    
-    public_video_url = "https://topsungglobal.bond/output/final_story.mp4"
-    
-    print("Posting to Instagram Reels...")
-    creation_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
-    creation_payload = {
-        "access_token": FB_PAGE_ACCESS_TOKEN,
-        "media_type": "REELS",
-        "video_url": public_video_url,
-        "caption": caption
-    }
-    creation_res = requests.post(creation_url, data=creation_payload).json()
-    creation_id = creation_res.get("id")
-
-    if creation_id:
-        print("[+] IG Container created. Waiting for processing...")
-        time.sleep(15)
-        
-        publish_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
-        publish_payload = {
-            "access_token": FB_PAGE_ACCESS_TOKEN,
-            "creation_id": creation_id
-        }
-        publish_res = requests.post(publish_url, data=publish_payload).json()
-        print(f"[+] Instagram Success: Media ID {publish_res.get('id')}")
-    else:
-        print(f"[-] Instagram Creation Error: {creation_res}")
-
-def upload_tiktok(title):
-    url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
-    headers = {
-        "Authorization": f"Bearer {TIKTOK_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "post_info": {
-            "title": title[:150],
-            "privacy_level": "PUBLIC_TO_EVERYONE"
-        },
-        "source_info": {
-            "source": "FILE_UPLOAD",
-            "video_size": os.path.getsize(FINAL_VIDEO_PATH)
-        }
-    }
-    r = requests.post(url, headers=headers, json=payload).json()
-    print(f"[+] TikTok Success: {r}")
 
 if __name__ == "__main__":
     current_episode = get_next_episode_number()
@@ -247,22 +170,9 @@ if __name__ == "__main__":
     print("Rendering final episodic video with multi-background switching and voiceover...")
     render_video()
     
-    print("Posting video...")
     if YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN:
         try: upload_youtube(f"{story['title']} - Ep. {current_episode}", caption)
         except Exception as e: print(f"[-] YouTube Error: {e}")
-
-    if FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN:
-        try: upload_facebook(f"{story['title']} - Ep. {current_episode}", caption)
-        except Exception as e: print(f"[-] Facebook Error: {e}")
-        
-    if IG_USER_ID and FB_PAGE_ACCESS_TOKEN:
-        try: upload_instagram(caption)
-        except Exception as e: print(f"[-] Instagram Error: {e}")
-        
-    if TIKTOK_ACCESS_TOKEN:
-        try: upload_tiktok(f"{story['title']} - Ep. {current_episode}")
-        except Exception as e: print(f"[-] TikTok Error: {e}")
         
     save_episode_number(current_episode + 1)
     print("Execution completed successfully.")
