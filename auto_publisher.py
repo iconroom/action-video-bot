@@ -52,7 +52,7 @@ def fetch_latest_trending_news(processed_ids):
     return None, None
 
 def generate_multimedia_script(title, summary):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     prompt = f"""
     Turn this news story into a short, punchy vertical video script. Return valid JSON with keys: 
