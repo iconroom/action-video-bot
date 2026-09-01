@@ -117,8 +117,20 @@ def render_video():
         filter_complex += f"[{idx}:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2,fps=30[v{idx}];"
 
     concat_inputs = "".join([f"[v{idx}]" for idx in range(len(stock_files))])
-    filter_complex += f"{concat_inputs}concat=n={len(stock_files)}:v=1:a=0[outv]"
-    audio_idx = len(stock_files)
+    
+    # Check if a logo file exists to include it in the filter graph
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        logo_input_idx = len(stock_files)
+        inputs.extend(["-i", logo_path])
+        # Concat the video clips first into [combined], then scale/overlay the logo in the top-right corner
+        filter_complex += f"{concat_inputs}concat=n={len(stock_files)}:v=1:a=0[combined];"
+        filter_complex += f"[{logo_input_idx}:v]scale=300:-1[scaled_logo];" # Scales logo width to 300px, keeping aspect ratio
+        filter_complex += f"[combined][scaled_logo]overlay=W-w-80:80[outv]"
+        audio_idx = logo_input_idx + 1
+    else:
+        filter_complex += f"{concat_inputs}concat=n={len(stock_files)}:v=1:a=0[outv]"
+        audio_idx = len(stock_files)
 
     ffmpeg_cmd = [
         "ffmpeg", "-y"
