@@ -3,7 +3,6 @@ import sys
 import json
 import feedparser
 import requests
-import time
 import asyncio
 import edge_tts
 import subprocess
@@ -13,10 +12,10 @@ from googleapiclient.http import MediaFileUpload
 
 # Environment Credentials
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # Drop this in your GitHub Secrets to use OpenAI instead
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
-IG_USER_ID = os.getenv("IG_USER_ID")
 TIKTOK_ACCESS_TOKEN = os.getenv("TIKTOK_ACCESS_TOKEN")
 
 # YouTube OAuth
@@ -52,8 +51,6 @@ def fetch_latest_trending_news(processed_ids):
     return None, None
 
 def generate_multimedia_script(title, summary):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    headers = {"Content-Type": "application/json"}
     prompt = f"""
     Turn this news story into a short, punchy vertical video script. Return valid JSON with keys: 
     'title', 'narrative', 'hashtags', and 'scenes' (a list of 5 separate sequential objects, each having 'search_keyword' for Pexels background footage and 'narration_text' matching that specific segment).
@@ -61,14 +58,30 @@ def generate_multimedia_script(title, summary):
     Title: {title}
     Summary: {summary}
     """
+
+    # Use OpenAI if the OpenAI API Key is present
+    if OPENAI_API_KEY and not GEMINI_API_KEY:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"}
+        }
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
+        return json.loads(res.json()["choices"][0]["message"]["content"])
+
+    # Default to Gemini 3.5 Flash (Current 2026 Standard)
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"}
     }
     res = requests.post(url, headers=headers, json=payload)
     res.raise_for_status()
-    data = res.json()
-    return json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+    return json.loads(res.json()["candidates"][0]["content"]["parts"][0]["text"])
 
 async def generate_voiceover(full_text):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
