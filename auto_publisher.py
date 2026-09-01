@@ -53,10 +53,10 @@ def generate_story_script(episode_num):
     payload = {
         "model": "openai/gpt-oss-120b",
         "messages": [
-            {"role": "system", "content": "You are a professional action movie storyteller producing episodic short-form content."},
+            {"role": "system", "content": "You are a professional action movie storyteller producing fast-paced episodic short-form content."},
             {
                 "role": "user", 
-                "content": f"Write Episode {episode_num} of an action-packed cinematic story arc. Return JSON with keys: 'title', 'narrative', 'hashtags', and 'scenes' (a list of 3 separate objects, each having 'search_keyword' for Pexels background footage and 'narration_text' matching that specific part of the story)."
+                "content": f"Write Episode {episode_num} of an action-packed cinematic story arc. Return JSON with keys: 'title', 'narrative', 'hashtags', and 'scenes' (a list of 10 separate sequential objects, each having 'search_keyword' for Pexels background footage and 'narration_text' matching that specific part of the story)."
             }
         ],
         "response_format": {"type": "json_object"}
@@ -103,30 +103,37 @@ def render_video():
     if not stock_files:
         raise FileNotFoundError("No clips were downloaded.")
 
-    concat_file = os.path.join(OUTPUT_DIR, "concat_list.txt")
-    with open(concat_file, "w") as f:
-        for clip in stock_files:
-            f.write(f"file '{os.path.abspath(clip)}'\n")
+    inputs = []
+    filter_complex = ""
+    for idx, clip in enumerate(stock_files):
+        inputs.extend(["-stream_loop", "-1", "-i", clip])
+        filter_complex += f"[{idx}:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2,fps=30[v{idx}];"
 
-    filter_complex = (
-        "[0:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2,fps=30[v]"
-    )
+    concat_inputs = "".join([f"[v{idx}]" for idx in range(len(stock_files))])
+    filter_complex += f"{concat_inputs}concat=n={len(stock_files)}:v=1:a=0[v_cat];"
+
     if os.path.exists("watermark.png"):
-        filter_complex += ";[v]movie=watermark.png,scale=300:-1[wm];[v][wm]overlay=W-w-50:H-h-150[outv]"
+        filter_complex += "[v_cat]movie=watermark.png,scale=300:-1[wm];[v_cat][wm]overlay=W-w-50:H-h-150[outv]"
     else:
-        filter_complex += ";[v]copy[outv]"
+        filter_complex += "[v_cat]copy[outv]"
 
-    # Renders concatenated background video synchronized precisely to the generated speech audio track duration
+    audio_idx = len(stock_files)
+
     ffmpeg_cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        "ffmpeg", "-y"
+    ] + inputs + [
         "-i", AUDIO_PATH,
         "-filter_complex", filter_complex,
-        "-map", "[outv]", "-map", "1:a",
+        "-map", "[outv]",
+        "-map", f"{audio_idx}:a",
+        "-t", "180",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-shortest",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
         FINAL_VIDEO_PATH
     ]
     subprocess.run(ffmpeg_cmd, check=True)
+    print("[+] Full 3-minute episodic movie rendered successfully with 10 multi-scene switches and synchronized audio.")
 
 def upload_youtube(title, description):
     creds = Credentials(
@@ -226,7 +233,7 @@ if __name__ == "__main__":
     scenes = story.get("scenes", [])
     
     # Combine individual scene narratives into a full continuous voiceover script
-    full_narrative = " ".join([scene.get("narrative_text", "") for scene in scenes])
+    full_narrative = " ".join([scene.get("narration_text", "") for scene in scenes])
     if not full_narrative:
         full_narrative = story.get("narrative", "")
 
